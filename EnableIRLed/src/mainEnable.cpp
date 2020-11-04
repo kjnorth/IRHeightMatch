@@ -43,17 +43,6 @@ int main() {
   StartIRLedTimer();
 
   while (1) {
-    // if (printFlag) {
-    //   unsigned long ct = micros();
-    //   static unsigned long pt = ct;
-    //   uint32_t temp;
-    //   ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-    //     temp = totalCycles;
-    //   }
-    //   LogInfo("tx complete %lu\n", temp);
-    //   pt = ct;
-    //   printFlag = false;
-    // }
     static bool stopped = false;
     if (digitalRead(BTN_IN) == LOW && !stopped) {
       StopIRLedTimer();
