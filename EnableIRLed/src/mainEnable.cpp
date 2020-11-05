@@ -131,7 +131,7 @@ ISR(TIMER3_COMPA_vect) {
         curState = START_BURST_7ms;
       }
       break;
-  };
+  }
 }
 
 /** for pwm freq of 37.9 kHz, want prescaler of 1, and TOP = (clkSpeed / (freqHz * prescaler)) - 1
