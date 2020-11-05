@@ -3,8 +3,13 @@
 #include "../lib/DataLog/DataLog.h"
 
 #define CAPTURE_PIN 3
+#define CAPTURE_PIN2 6
 #define LED_PIN 5
-// #define TEST_PWM_PIN 10
+
+/** make this either TCB1 or TCB2, TCB3/4 ports are not mapped to N.E. pinout
+ * NOTE: modify the PORTMUX, EVSYS, and Interrupt Vector properly in Init
+ * function when changing this #define */
+#define TCBn_IC_OBJECT TCB1
 
 void InitIRCaptureTimer(void);
 void StartIRCaptureTimer(void);
@@ -16,26 +21,28 @@ int main() {
   init(); // inits the Arduino's registers for time-keeping, pwm, and such
   Serial.begin(115200);
   delay(100); // small delay to give the serial port time to boot up
-  LogInfo("Capture IR Data project begins\n");
+  Serial.printf("Capture IR Data project begins\n");
 
   pinMode(CAPTURE_PIN, INPUT);
-  // attachInterrupt(CAPTURE_PIN, TestISR, CHANGE);
+  pinMode(CAPTURE_PIN2, INPUT);
+  // **** example pin config for ISR on an edge change ****
+  PORTA.DIRCLR |= (1 << 2); // set PA2 (D18) to input
+  PORTA.PIN2CTRL = 0; // set PA2 (D18) CTRL for no inversion, no pullup, and interrupts disabled (see 16.5.12 in ATmega4809 datasheet)
+  PORTA.PIN2CTRL |= PORT_ISC_BOTHEDGES_gc;
+  // ******************************************************
   pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, HIGH);
+  digitalWrite(LED_PIN, LOW);
   ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
     InitIRCaptureTimer();
     StartIRCaptureTimer();
   }
   sei(); // enable interrupts
 
-  // pinMode(TEST_PWM_PIN, OUTPUT);
-  // analogWrite(TEST_PWM_PIN, 127);
-
   while(1) {
     unsigned long ct = millis();
     static unsigned long pt = ct;
-    if (ct - pt >= 500) {
-      LogInfo("i am alive\n");
+    if (ct - pt >= 5000) {
+      Serial.printf("alive: CTRLA reg %u, TCBn_CTRLB reg %u, EVCTRL reg %u\n", TCBn_IC_OBJECT.CTRLA, TCBn_IC_OBJECT.CTRLB, TCBn_IC_OBJECT.EVCTRL);
       pt = ct;
     }
   }
@@ -54,10 +61,6 @@ typedef enum {
 #define CYCLES_THRESHOLD_AT_20MHz         2 // 2 cycles at 50us = to 100us padding
 #define EXPECTED_BYTE_RECEIVED            0xD2
 
-void TestISR(void) { // this works but will be jank to implement
-  digitalWrite(LED_PIN, !digitalRead(LED_PIN));
-}
-
 /** 
  * @Author: Kodiak North 
  * @Date: 2020-11-04 08:19:24 
@@ -65,17 +68,15 @@ void TestISR(void) { // this works but will be jank to implement
  * captures and interrupts on negative edge on D3.
  * It increments at 20MHz i.e. 50us period
  */
-ISR(TCB0_INT_vect) {
+ISR(TCB1_INT_vect) {
   // static ir_captutre_state_t curState = WAIT_START;
   // static uint8_t curBit = 0;
   // static uint8_t byteReceived = 0;
   // static uint16_t cycleCount = TCB1_CCMP;
 
-  uint16_t cycleCount = TCB0.CCMP;
-  LogInfo("isr, value in ccmp %u\n", cycleCount);
+  uint16_t cycleCount = TCBn_IC_OBJECT.CCMP;
+  Serial.printf("isr, value in ccmp %u, cnt %u\n", cycleCount, TCBn_IC_OBJECT.CNT);
   digitalWrite(LED_PIN, !digitalRead(LED_PIN));
-  // clear interrupt flag
-  TCB0_INTFLAGS |= (1 << 0);
 
 /*
   switch (curState) {
@@ -122,6 +123,13 @@ ISR(TCB0_INT_vect) {
   }*/
 }
 
+// **** interrupt handler for any? interrupt on port A ****
+ISR(PORTA_PORT_vect) {
+  PORTA.INTFLAGS |= (1 << 2); // clear PA2 interrupt flag
+  // Serial.printf("port a interrupt\n");
+}
+// ********************************************************
+
 /** 
  * @Author: Kodiak North 
  * @Date: 2020-11-03 15:21:38 
@@ -131,28 +139,38 @@ ISR(TCB0_INT_vect) {
  * @Note: see section 15.3.6 in ATmega4809 datasheet
  */
 void InitIRCaptureTimer(void) {
-  // set TCB1's alternate output select, it is bit 1 in TCBROUTEA register
-  // PORTMUX_TCBROUTEA |= (1 << 1); // for TCB1
-  // for TCB0 alt location
-  PORTMUX_TCBROUTEA |= (1 << 0);
+  // disable the peripheral first
+  TCBn_IC_OBJECT.CTRLA &= ~(1 << TCB_ENABLE_bp); // clear TCBn_CTRLA's enable bit which is bit 0
+  TCBn_IC_OBJECT.CTRLA = 0; // reset TCBn_CTRLA register
+  TCBn_IC_OBJECT.CTRLB = 0; // reset TCBn_CTRLB register
+  TCBn_IC_OBJECT.EVCTRL = 0; // reset TCBn_EVCTRL register
+  TCBn_IC_OBJECT.INTCTRL = 0; // reset TCBn_INTCTRL register
+  TCBn_IC_OBJECT.CNT = 0; // reset the peripheral's count
+  TCBn_IC_OBJECT.CCMP = 0; // reset the peripheral's Compare/Capture register
+  PORTMUX_TCBROUTEA = 0; // reset the TCB PORTMUX register
+  // set TCB1's alternate output select (PF5), it is bit 1 in TCBROUTEA register
+  PORTMUX_TCBROUTEA |= (1 << PORTMUX_TCB1_bp); // for TCB1
   // keep all default settings in CTRLA, this means prescaler is 1 (CLKDIV1)
-  TCB0_CTRLA |= 0x00;
+  TCBn_IC_OBJECT.CTRLA |= 0x00;
   // config CTRLB's CNTMODE for IC Pulse-Width Measurement mode, CTRLB[2:0] = 0x4
-  TCB0_CTRLB |= (1 << 2);
-  /** keep all default settings in EVCTRL, this means for ICPWMM, counter is
-   * cleared and restarted on POS edge, NEG edge interrupts */
-  TCB0_EVCTRL |= 0x00;
-  // TCB1_EVCTRL |= (1 << 6); // enable the IC Noise Cancellation Filter
+  TCBn_IC_OBJECT.CTRLB |= (1 << TCB_CNTMODE2_bp);
+  /** enable input capture event in EVCTRL, leave other bits cleared, this means for
+   * ICPWMM, counter is cleared and restarted on POS edge, NEG edge interrupts */
+  TCBn_IC_OBJECT.EVCTRL |= (1 << TCB_CAPTEI_bp); // enable input capture event
+  // TCB1_EVCTRL |= (1 << 6); // enable the IC Noise Cancellation Filter // TODO: try this if sunlight messes with receiver!
   // set bit to enable interrupt on capture, bit 0 in INTCTRL register
-  TCB0_INTCTRL |= (1 << 0);
-  // clear interrupt flag
-  TCB0_INTFLAGS |= (1 << 0);
+  TCBn_IC_OBJECT.INTCTRL |= (1 << TCB_CAPT_bp);
+  // clear any interrupt flag
+  TCBn_IC_OBJECT.INTFLAGS |= (1 << TCB_CAPT_bp);
+  // congifure the event system
+  EVSYS.CHANNEL4 = EVSYS_GENERATOR_PORT1_PIN5_gc; // map PF5 (D3) to event generator, refer to 14.5.2 in ATmega4809 datasheet when changing
+  EVSYS.USERTCB1 = EVSYS_CHANNEL_CHANNEL4_gc; // map event system channel 4 to TCB1 event user
 }
 
 void StartIRCaptureTimer(void) {
-  TCB0_CTRLA |= (1 << 0); // set CTRLA's enable bit which is bit 0
+  TCBn_IC_OBJECT.CTRLA |= (1 << TCB_ENABLE_bp); // set CTRLA's enable bit which is bit 0
 }
 
 void StopIRCaptureTimer(void) {
-  TCB0_CTRLA &= ~(1 << 0); // clear CTRLA's enable bit which is bit 0
+  TCBn_IC_OBJECT.CTRLA &= ~(1 << TCB_ENABLE_bp); // clear CTRLA's enable bit which is bit 0
 }
