@@ -19,12 +19,12 @@ int main() {
   LogInfo("Capture IR Data project begins\n");
 
   pinMode(CAPTURE_PIN, INPUT);
-  attachInterrupt(CAPTURE_PIN, TestISR, CHANGE);
+  // attachInterrupt(CAPTURE_PIN, TestISR, CHANGE);
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, HIGH);
   ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-    // InitIRCaptureTimer();
-    // StartIRCaptureTimer();
+    InitIRCaptureTimer();
+    StartIRCaptureTimer();
   }
   sei(); // enable interrupts
 
@@ -34,7 +34,7 @@ int main() {
   while(1) {
     unsigned long ct = millis();
     static unsigned long pt = ct;
-    if (ct - pt >= 5000) {
+    if (ct - pt >= 500) {
       LogInfo("i am alive\n");
       pt = ct;
     }
@@ -54,7 +54,7 @@ typedef enum {
 #define CYCLES_THRESHOLD_AT_20MHz         2 // 2 cycles at 50us = to 100us padding
 #define EXPECTED_BYTE_RECEIVED            0xD2
 
-void TestISR(void) {
+void TestISR(void) { // this works but will be jank to implement
   digitalWrite(LED_PIN, !digitalRead(LED_PIN));
 }
 
@@ -71,8 +71,11 @@ ISR(TCB0_INT_vect) {
   // static uint8_t byteReceived = 0;
   // static uint16_t cycleCount = TCB1_CCMP;
 
-  // LogInfo("isr, value in ccmp %u\n", TCB1.CCMP);
+  uint16_t cycleCount = TCB0.CCMP;
+  LogInfo("isr, value in ccmp %u\n", cycleCount);
   digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+  // clear interrupt flag
+  TCB0_INTFLAGS |= (1 << 0);
 
 /*
   switch (curState) {
