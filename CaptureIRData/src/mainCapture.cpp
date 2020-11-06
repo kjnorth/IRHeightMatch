@@ -54,11 +54,13 @@ typedef enum {
   CAPTURE_DATA,
 } ir_captutre_state_t;
 
-// NOTE: 20MHz is a 50us period
-#define NUM_CYCLES_FOR_1_125ms_AT_20MHz   22 // technically 22.5, will incorporate a threshold
-#define NUM_CYCLES_FOR_2_25ms_AT_20MHz    45
-#define NUM_CYCLES_FOR_3ms_AT_20MHz       60
-#define CYCLES_THRESHOLD_AT_20MHz         2 // 2 cycles at 50us = to 100us padding
+// NOTE: running at CLK_DIV2 is 10MHz freq which is a 100ns period
+// 8 MHz is 125ns
+// NOTE: 1ms is 1x10^6ns
+#define NUM_CYCLES_FOR_1_125ms_AT_10MHz   11250
+#define NUM_CYCLES_FOR_2_25ms_AT_10MHz    22500
+#define NUM_CYCLES_FOR_3ms_AT_10MHz       30000
+#define CYCLES_THRESHOLD_AT_10MHz         1000 // 1000 cycles at 100ns = .100ms padding
 #define EXPECTED_BYTE_RECEIVED            0xD2
 
 /** 
@@ -66,23 +68,20 @@ typedef enum {
  * @Date: 2020-11-04 08:19:24 
  * @Desc: timer restarts on positive edge on D3, then
  * captures and interrupts on negative edge on D3.
- * It increments at 20MHz i.e. 50us period
+ * It increments at 10MHz i.e. 100ns period
  */
 ISR(TCB1_INT_vect) {
-  // static ir_captutre_state_t curState = WAIT_START;
-  // static uint8_t curBit = 0;
-  // static uint8_t byteReceived = 0;
-  // static uint16_t cycleCount = TCB1_CCMP;
-
+  static ir_captutre_state_t curState = WAIT_START;
+  static uint8_t curBit = 0;
+  static uint8_t byteReceived = 0;
   uint16_t cycleCount = TCBn_IC_OBJECT.CCMP;
-  Serial.printf("isr, value in ccmp %u, cnt %u\n", cycleCount, TCBn_IC_OBJECT.CNT);
-  digitalWrite(LED_PIN, !digitalRead(LED_PIN));
 
-/*
+  Serial.printf("count %u\n", cycleCount);
+
   switch (curState) {
     case WAIT_START:
-      if ((cycleCount > (NUM_CYCLES_FOR_3ms_AT_20MHz - CYCLES_THRESHOLD_AT_20MHz))
-          && (cycleCount < (NUM_CYCLES_FOR_3ms_AT_20MHz + CYCLES_THRESHOLD_AT_20MHz))) {
+      if ((cycleCount > (NUM_CYCLES_FOR_3ms_AT_10MHz - CYCLES_THRESHOLD_AT_10MHz))
+          && (cycleCount < (NUM_CYCLES_FOR_3ms_AT_10MHz + CYCLES_THRESHOLD_AT_10MHz))) {
         // start sequence received
         curBit = 0;
         byteReceived = 0;
@@ -91,19 +90,21 @@ ISR(TCB1_INT_vect) {
       }
       break;
     case CAPTURE_DATA:
-      if ((cycleCount >= (NUM_CYCLES_FOR_1_125ms_AT_20MHz - CYCLES_THRESHOLD_AT_20MHz))
-          && (cycleCount <= (NUM_CYCLES_FOR_1_125ms_AT_20MHz + CYCLES_THRESHOLD_AT_20MHz))) {
+      if ((cycleCount >= (NUM_CYCLES_FOR_1_125ms_AT_10MHz - CYCLES_THRESHOLD_AT_10MHz))
+          && (cycleCount <= (NUM_CYCLES_FOR_1_125ms_AT_10MHz + CYCLES_THRESHOLD_AT_10MHz))) {
         // 0 received
-        // no bit to set when a 0 is received...
+        // byteReceived |= (0 << curBit);
+        /** unnecessary to call line above since byteReceived is cleared in WAIT_START
+         * condition is still necessary so the 'else' is not entered incorrectly */
       }
-      else if ((cycleCount >= (NUM_CYCLES_FOR_2_25ms_AT_20MHz - CYCLES_THRESHOLD_AT_20MHz))
-          && (cycleCount <= (NUM_CYCLES_FOR_2_25ms_AT_20MHz + CYCLES_THRESHOLD_AT_20MHz))) {
+      else if ((cycleCount >= (NUM_CYCLES_FOR_2_25ms_AT_10MHz - CYCLES_THRESHOLD_AT_10MHz))
+          && (cycleCount <= (NUM_CYCLES_FOR_2_25ms_AT_10MHz + CYCLES_THRESHOLD_AT_10MHz))) {
         // 1 received
         byteReceived |= (1 << curBit);
       }
       else {
         // corrupt data or false IR source detected
-        // digitalWrite(LED_PIN, LOW);
+        digitalWrite(LED_PIN, LOW);
         curState = WAIT_START;
       }
       curBit++;
@@ -111,16 +112,16 @@ ISR(TCB1_INT_vect) {
       if (curBit > 7 && curState == CAPTURE_DATA) { // all bits[7:0] received, no corrupt data, check for correct byte received
         if (byteReceived == EXPECTED_BYTE_RECEIVED) {
           // expected byte has been received, light the LED
-          // digitalWrite(LED_PIN, HIGH);
+          digitalWrite(LED_PIN, HIGH);
         }
         else {
           // incorrect byte was received, turn LED OFF
-          // digitalWrite(LED_PIN, LOW);
+          digitalWrite(LED_PIN, LOW);
         }
         curState = WAIT_START;
       }
       break;
-  }*/
+  }
 }
 
 // **** interrupt handler for any? interrupt on port A ****
@@ -150,14 +151,14 @@ void InitIRCaptureTimer(void) {
   PORTMUX_TCBROUTEA = 0; // reset the TCB PORTMUX register
   // set TCB1's alternate output select (PF5), it is bit 1 in TCBROUTEA register
   PORTMUX_TCBROUTEA |= (1 << PORTMUX_TCB1_bp); // for TCB1
-  // keep all default settings in CTRLA, this means prescaler is 1 (CLKDIV1)
-  TCBn_IC_OBJECT.CTRLA |= 0x00;
+  // set CTRLA's CLKSEL for CLKDIV2 (2 prescaler)
+  TCBn_IC_OBJECT.CTRLA |= (1 << TCB_CLKSEL0_bp);
   // config CTRLB's CNTMODE for IC Pulse-Width Measurement mode, CTRLB[2:0] = 0x4
   TCBn_IC_OBJECT.CTRLB |= (1 << TCB_CNTMODE2_bp);
   /** enable input capture event in EVCTRL, leave other bits cleared, this means for
    * ICPWMM, counter is cleared and restarted on POS edge, NEG edge interrupts */
   TCBn_IC_OBJECT.EVCTRL |= (1 << TCB_CAPTEI_bp); // enable input capture event
-  // TCB1_EVCTRL |= (1 << 6); // enable the IC Noise Cancellation Filter // TODO: try this if sunlight messes with receiver!
+  TCB1_EVCTRL |= (1 << 6); // enable the IC Noise Cancellation Filter // TODO: try this if sunlight messes with receiver!
   // set bit to enable interrupt on capture, bit 0 in INTCTRL register
   TCBn_IC_OBJECT.INTCTRL |= (1 << TCB_CAPT_bp);
   // clear any interrupt flag
