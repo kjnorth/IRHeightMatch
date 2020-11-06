@@ -61,7 +61,7 @@ int main() {
 #define NUM_CYCLES_FOR_2_25ms_AT_37_9_kHz     85
 #define NUM_CYCLES_FOR_3_5ms_AT_37_9_kHz      133
 #define NUM_CYCLES_FOR_7ms_AT_37_9_kHz        265
-#define NUM_CYCLES_FOR_20ms_AT_37_9_kHz       758
+#define NUM_CYCLES_FOR_16ms_AT_37_9_kHz       606
 #define NUM_CYCLES_FOR_BURST                  10
 
 // modified version of NEC Code - repetitive data, LSB transmitted first
@@ -125,7 +125,7 @@ ISR(TIMER3_COMPA_vect) {
       }
       break;
     case SIGNAL_GAP: // gap for 20ms before sending the next signal
-      if (cycleCount >= NUM_CYCLES_FOR_20ms_AT_37_9_kHz) {
+      if (cycleCount >= NUM_CYCLES_FOR_16ms_AT_37_9_kHz) {
         cycleCount = 0;
         StartIRLedBurst();
         curState = START_BURST_7ms;

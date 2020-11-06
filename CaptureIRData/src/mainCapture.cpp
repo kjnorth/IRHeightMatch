@@ -54,13 +54,12 @@ typedef enum {
   CAPTURE_DATA,
 } ir_captutre_state_t;
 
-// NOTE: running at CLK_DIV2 is 10MHz freq which is a 100ns period
-// 8 MHz is 125ns
+// NOTE: running at CLK_DIV2 is 8MHz freq which is a 125ns period
 // NOTE: 1ms is 1x10^6ns
-#define NUM_CYCLES_FOR_1_125ms_AT_10MHz   11250
-#define NUM_CYCLES_FOR_2_25ms_AT_10MHz    22500
-#define NUM_CYCLES_FOR_3ms_AT_10MHz       30000
-#define CYCLES_THRESHOLD_AT_10MHz         1000 // 1000 cycles at 100ns = .100ms padding
+#define NUM_CYCLES_FOR_1_125ms_AT_8MHz    9000
+#define NUM_CYCLES_FOR_2_25ms_AT_8MHz     18000
+#define NUM_CYCLES_FOR_3_5ms_AT_8MHz      28000
+#define CYCLES_THRESHOLD_AT_8MHz          1000 // 1000 cycles at 125ns = .125ms padding
 #define EXPECTED_BYTE_RECEIVED            0xD2
 
 /** 
@@ -80,8 +79,8 @@ ISR(TCB1_INT_vect) {
 
   switch (curState) {
     case WAIT_START:
-      if ((cycleCount > (NUM_CYCLES_FOR_3ms_AT_10MHz - CYCLES_THRESHOLD_AT_10MHz))
-          && (cycleCount < (NUM_CYCLES_FOR_3ms_AT_10MHz + CYCLES_THRESHOLD_AT_10MHz))) {
+      if ((cycleCount > (NUM_CYCLES_FOR_3_5ms_AT_8MHz - CYCLES_THRESHOLD_AT_8MHz))
+          && (cycleCount < (NUM_CYCLES_FOR_3_5ms_AT_8MHz + CYCLES_THRESHOLD_AT_8MHz))) {
         // start sequence received
         curBit = 0;
         byteReceived = 0;
@@ -90,15 +89,15 @@ ISR(TCB1_INT_vect) {
       }
       break;
     case CAPTURE_DATA:
-      if ((cycleCount >= (NUM_CYCLES_FOR_1_125ms_AT_10MHz - CYCLES_THRESHOLD_AT_10MHz))
-          && (cycleCount <= (NUM_CYCLES_FOR_1_125ms_AT_10MHz + CYCLES_THRESHOLD_AT_10MHz))) {
+      if ((cycleCount >= (NUM_CYCLES_FOR_1_125ms_AT_8MHz - CYCLES_THRESHOLD_AT_8MHz))
+          && (cycleCount <= (NUM_CYCLES_FOR_1_125ms_AT_8MHz + CYCLES_THRESHOLD_AT_8MHz))) {
         // 0 received
         // byteReceived |= (0 << curBit);
         /** unnecessary to call line above since byteReceived is cleared in WAIT_START
          * condition is still necessary so the 'else' is not entered incorrectly */
       }
-      else if ((cycleCount >= (NUM_CYCLES_FOR_2_25ms_AT_10MHz - CYCLES_THRESHOLD_AT_10MHz))
-          && (cycleCount <= (NUM_CYCLES_FOR_2_25ms_AT_10MHz + CYCLES_THRESHOLD_AT_10MHz))) {
+      else if ((cycleCount >= (NUM_CYCLES_FOR_2_25ms_AT_8MHz - CYCLES_THRESHOLD_AT_8MHz))
+          && (cycleCount <= (NUM_CYCLES_FOR_2_25ms_AT_8MHz + CYCLES_THRESHOLD_AT_8MHz))) {
         // 1 received
         byteReceived |= (1 << curBit);
       }
@@ -158,7 +157,7 @@ void InitIRCaptureTimer(void) {
   /** enable input capture event in EVCTRL, leave other bits cleared, this means for
    * ICPWMM, counter is cleared and restarted on POS edge, NEG edge interrupts */
   TCBn_IC_OBJECT.EVCTRL |= (1 << TCB_CAPTEI_bp); // enable input capture event
-  TCB1_EVCTRL |= (1 << 6); // enable the IC Noise Cancellation Filter // TODO: try this if sunlight messes with receiver!
+  // TCB1_EVCTRL |= (1 << 6); // enable the IC Noise Cancellation Filter // TODO: try this if sunlight messes with receiver!
   // set bit to enable interrupt on capture, bit 0 in INTCTRL register
   TCBn_IC_OBJECT.INTCTRL |= (1 << TCB_CAPT_bp);
   // clear any interrupt flag
