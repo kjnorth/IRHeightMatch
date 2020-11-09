@@ -17,9 +17,6 @@ void StopIRCaptureTimer(void);
 
 void TestISR(void);
 
-volatile bool isDataReady = false;
-volatile uint16_t data[100] = {0};
-
 int main() {
   init(); // inits the Arduino's registers for time-keeping, pwm, and such
   Serial.begin(115200);
@@ -48,14 +45,6 @@ int main() {
       Serial.printf("alive: CTRLA reg %u, TCBn_CTRLB reg %u, EVCTRL reg %u\n", TCBn_IC_OBJECT.CTRLA, TCBn_IC_OBJECT.CTRLB, TCBn_IC_OBJECT.EVCTRL);
       pt = ct;
     }
-
-    static bool printed = false;
-    if (isDataReady && !printed) {
-      for (int i = 0; i < 100; i++) {
-        Serial.printf("data: %u\n", data[i]);
-      }
-      printed = true;
-    }
   }
   return 0;
 }
@@ -76,24 +65,21 @@ typedef enum {
 /** 
  * @Author: Kodiak North 
  * @Date: 2020-11-04 08:19:24 
- * @Desc: timer restarts on positive edge on D3, then
- * captures and interrupts on negative edge on D3.
- * It increments at 10MHz i.e. 100ns period
+ * @Desc: TCBn is configured for Input Capture
+ * Pulse Width Measurement mode to measure
+ * the duration between pulses on the VM317 IR
+ * receiver. The IR LED uses a modified version
+ * of NEC Code to transmits single byte. An event
+ * is posted upon reception of the expected byte.
+ * Note: TCBn increments at 8MHz i.e. 125ns period
+ * Note: TCB1 is currently used, meaning IC pin
+ * is D3
  */
 ISR(TCB1_INT_vect) {
   static ir_captutre_state_t curState = WAIT_START;
   static uint8_t curBit = 0;
   static uint8_t byteReceived = 0;
   uint16_t cycleCount = TCBn_IC_OBJECT.CCMP;
-
-  static int i = 0;
-  if (i < 100) {
-    data[i] = cycleCount;
-    i++;
-  }
-  else {
-    isDataReady = true;
-  }
 
   switch (curState) {
     case WAIT_START:
@@ -124,12 +110,14 @@ ISR(TCB1_INT_vect) {
       else {
         // corrupt data or false IR source detected
         curState = WAIT_START;
+        // Serial.printf("count out of range %u, curBit %u\n", cycleCount, curBit);
       }
 
       if (curBit > 7) { // all bits[7:0] received, no corrupt data, check for correct byte received
         if (byteReceived == EXPECTED_BYTE_RECEIVED) {
           // expected byte has been received, light the LED
           digitalWrite(LED_PIN, HIGH);
+          // Serial.printf("ON\n");
         }
         curState = WAIT_START;
       }
@@ -168,10 +156,10 @@ void InitIRCaptureTimer(void) {
   TCBn_IC_OBJECT.CTRLA |= (1 << TCB_CLKSEL0_bp);
   // config CTRLB's CNTMODE for IC Pulse-Width Measurement mode, CTRLB[2:0] = 0x4
   TCBn_IC_OBJECT.CTRLB |= (1 << TCB_CNTMODE2_bp);
-  /** enable input capture event in EVCTRL, leave other bits cleared, this means for
-   * ICPWMM, counter is cleared and restarted on POS edge, NEG edge interrupts */
-  TCBn_IC_OBJECT.EVCTRL |= (1 << TCB_CAPTEI_bp); // enable input capture event
-  // TCB1_EVCTRL |= (1 << 6); // enable the IC Noise Cancellation Filter // TODO: try this if sunlight messes with receiver!
+  /** enable input capture event and noise cancellation filter in EVCTRL, leave
+   * other bits cleared, this means for ICPWMM, counter is cleared and restarted
+   * on POS edge, NEG edge interrupts */
+  TCBn_IC_OBJECT.EVCTRL |= (1 << TCB_CAPTEI_bp) | (1 << TCB_FILTER_bp);
   // set bit to enable interrupt on capture, bit 0 in INTCTRL register
   TCBn_IC_OBJECT.INTCTRL |= (1 << TCB_CAPT_bp);
   // clear any interrupt flag
