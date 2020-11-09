@@ -144,9 +144,6 @@ ISR(TIMER3_COMPA_vect) {
 void InitIRLedTimer(void) {
   ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
     TCCR3A = 0; TCCR3B = 0; TCCR3C = 0; // set TCCRnx registers to 0
-    // /** config COM3A[1:0] for non-inverting mode, therefore need to set bit 1.
-    //  * COM3B/C[1:0] are left as 0, leaving them disconnected so those ports operate normally */
-    // TCCR3A |= (1 << COM3A1);
     /** config WGM3[3:0] = 14 for fast PWM mode with ICR3 as the timer's TOP value,
      * therefore need to set WGM3 bits 3, 2, and 1 */
     TCCR3A |= (1 << WGM31); // TCCRnA holds WGMn bits [1:0]
@@ -180,8 +177,9 @@ void StopIRLedTimer(void) {
 
 void StartIRLedBurst(void) {
   ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-    /** config COM3A[1:0] for non-inverting mode, therefore need to set bit 1.
-     * COM3B/C[1:0] are left as 0, leaving them disconnected so those ports operate normally */
+    /** connect OC3A to the port, config COM3A[1:0] for non-inverting mode,
+     * therefore need to set bit 1. COM3B/C[1:0] are left as 0, leaving
+     * OC3B/C disconnected so those ports operate normally */
     TCCR3A |= (1 << COM3A1);
   }
 }

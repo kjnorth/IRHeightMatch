@@ -110,14 +110,12 @@ ISR(TCB1_INT_vect) {
       else {
         // corrupt data or false IR source detected
         curState = WAIT_START;
-        // Serial.printf("count out of range %u, curBit %u\n", cycleCount, curBit);
       }
 
       if (curBit > 7) { // all bits[7:0] received, no corrupt data, check for correct byte received
         if (byteReceived == EXPECTED_BYTE_RECEIVED) {
           // expected byte has been received, light the LED
           digitalWrite(LED_PIN, HIGH);
-          // Serial.printf("ON\n");
         }
         curState = WAIT_START;
       }
