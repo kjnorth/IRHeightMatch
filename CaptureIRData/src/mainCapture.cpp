@@ -17,6 +17,9 @@ void StopIRCaptureTimer(void);
 
 void TestISR(void);
 
+volatile bool isDataReady = false;
+volatile uint16_t data[100] = {0};
+
 int main() {
   init(); // inits the Arduino's registers for time-keeping, pwm, and such
   Serial.begin(115200);
@@ -45,6 +48,14 @@ int main() {
       Serial.printf("alive: CTRLA reg %u, TCBn_CTRLB reg %u, EVCTRL reg %u\n", TCBn_IC_OBJECT.CTRLA, TCBn_IC_OBJECT.CTRLB, TCBn_IC_OBJECT.EVCTRL);
       pt = ct;
     }
+
+    static bool printed = false;
+    if (isDataReady && !printed) {
+      for (int i = 0; i < 100; i++) {
+        Serial.printf("data: %u\n", data[i]);
+      }
+      printed = true;
+    }
   }
   return 0;
 }
@@ -59,7 +70,7 @@ typedef enum {
 #define NUM_CYCLES_FOR_1_125ms_AT_8MHz    9000
 #define NUM_CYCLES_FOR_2_25ms_AT_8MHz     18000
 #define NUM_CYCLES_FOR_3_5ms_AT_8MHz      28000
-#define CYCLES_THRESHOLD_AT_8MHz          1000 // 1000 cycles at 125ns = .125ms padding
+#define CYCLES_THRESHOLD                  1000 // 1000 cycles at 125ns = .125ms padding
 #define EXPECTED_BYTE_RECEIVED            0xD2
 
 /** 
@@ -75,47 +86,50 @@ ISR(TCB1_INT_vect) {
   static uint8_t byteReceived = 0;
   uint16_t cycleCount = TCBn_IC_OBJECT.CCMP;
 
-  Serial.printf("count %u\n", cycleCount);
+  static int i = 0;
+  if (i < 100) {
+    data[i] = cycleCount;
+    i++;
+  }
+  else {
+    isDataReady = true;
+  }
 
   switch (curState) {
     case WAIT_START:
-      if ((cycleCount > (NUM_CYCLES_FOR_3_5ms_AT_8MHz - CYCLES_THRESHOLD_AT_8MHz))
-          && (cycleCount < (NUM_CYCLES_FOR_3_5ms_AT_8MHz + CYCLES_THRESHOLD_AT_8MHz))) {
+      if ((cycleCount > (NUM_CYCLES_FOR_3_5ms_AT_8MHz - CYCLES_THRESHOLD))
+          && (cycleCount < (NUM_CYCLES_FOR_3_5ms_AT_8MHz + CYCLES_THRESHOLD))) {
         // start sequence received
         curBit = 0;
         byteReceived = 0;
         curState = CAPTURE_DATA;
-        // digitalWrite(LED_PIN, HIGH);
+        digitalWrite(LED_PIN, 0);
       }
       break;
     case CAPTURE_DATA:
-      if ((cycleCount >= (NUM_CYCLES_FOR_1_125ms_AT_8MHz - CYCLES_THRESHOLD_AT_8MHz))
-          && (cycleCount <= (NUM_CYCLES_FOR_1_125ms_AT_8MHz + CYCLES_THRESHOLD_AT_8MHz))) {
-        // 0 received
-        // byteReceived |= (0 << curBit);
+      if ((cycleCount >= (NUM_CYCLES_FOR_1_125ms_AT_8MHz - CYCLES_THRESHOLD))
+          && (cycleCount <= (NUM_CYCLES_FOR_1_125ms_AT_8MHz + CYCLES_THRESHOLD))) {
+        // 0 received, clear the cur bit
+        // byteReceived &= ~(1 << curBit);
         /** unnecessary to call line above since byteReceived is cleared in WAIT_START
          * condition is still necessary so the 'else' is not entered incorrectly */
+        curBit++;
       }
-      else if ((cycleCount >= (NUM_CYCLES_FOR_2_25ms_AT_8MHz - CYCLES_THRESHOLD_AT_8MHz))
-          && (cycleCount <= (NUM_CYCLES_FOR_2_25ms_AT_8MHz + CYCLES_THRESHOLD_AT_8MHz))) {
-        // 1 received
+      else if ((cycleCount >= (NUM_CYCLES_FOR_2_25ms_AT_8MHz - CYCLES_THRESHOLD))
+          && (cycleCount <= (NUM_CYCLES_FOR_2_25ms_AT_8MHz + CYCLES_THRESHOLD))) {
+        // 1 received, set the cur bit
         byteReceived |= (1 << curBit);
+        curBit++;
       }
       else {
         // corrupt data or false IR source detected
-        digitalWrite(LED_PIN, LOW);
         curState = WAIT_START;
       }
-      curBit++;
 
-      if (curBit > 7 && curState == CAPTURE_DATA) { // all bits[7:0] received, no corrupt data, check for correct byte received
+      if (curBit > 7) { // all bits[7:0] received, no corrupt data, check for correct byte received
         if (byteReceived == EXPECTED_BYTE_RECEIVED) {
           // expected byte has been received, light the LED
           digitalWrite(LED_PIN, HIGH);
-        }
-        else {
-          // incorrect byte was received, turn LED OFF
-          digitalWrite(LED_PIN, LOW);
         }
         curState = WAIT_START;
       }
