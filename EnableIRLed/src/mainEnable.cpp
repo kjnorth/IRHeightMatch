@@ -27,8 +27,6 @@ typedef enum {
 
 static volatile ir_pulse_state_t curState = START_BURST_7ms;
 static volatile uint16_t cycleCount = 0;
-static volatile bool printFlag = false;
-static volatile uint32_t totalCycles = 0;
 
 int main() {
   init(); // inits the Arduino's registers for time-keeping, pwm, and such
@@ -124,7 +122,7 @@ ISR(TIMER3_COMPA_vect) {
         curState = BURSTING;
       }
       break;
-    case SIGNAL_GAP: // gap for 20ms before sending the next signal
+    case SIGNAL_GAP: // gap for 16ms before sending the next signal
       if (cycleCount >= NUM_CYCLES_FOR_16ms_AT_37_9_kHz) {
         cycleCount = 0;
         StartIRLedBurst();

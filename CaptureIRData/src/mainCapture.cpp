@@ -3,7 +3,6 @@
 #include "../lib/DataLog/DataLog.h"
 
 #define CAPTURE_PIN 3
-#define CAPTURE_PIN2 6
 #define LED_PIN 5
 
 /** make this either TCB1 or TCB2, TCB3/4 ports are not mapped to N.E. pinout
@@ -17,14 +16,15 @@ void StopIRCaptureTimer(void);
 
 void TestISR(void);
 
+volatile unsigned long ledStartTime = 0;
+
 int main() {
   init(); // inits the Arduino's registers for time-keeping, pwm, and such
   Serial.begin(115200);
   delay(100); // small delay to give the serial port time to boot up
   Serial.printf("Capture IR Data project begins\n");
 
-  pinMode(CAPTURE_PIN, INPUT);
-  pinMode(CAPTURE_PIN2, INPUT);
+  pinMode(CAPTURE_PIN, INPUT_PULLUP);
   // **** example pin config for ISR on an edge change ****
   PORTA.DIRCLR |= (1 << 2); // set PA2 (D18) to input
   PORTA.PIN2CTRL = 0; // set PA2 (D18) CTRL for no inversion, no pullup, and interrupts disabled (see 16.5.12 in ATmega4809 datasheet)
@@ -32,6 +32,8 @@ int main() {
   // ******************************************************
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);
   ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
     InitIRCaptureTimer();
     StartIRCaptureTimer();
@@ -44,6 +46,20 @@ int main() {
     if (ct - pt >= 5000) {
       Serial.printf("alive: CTRLA reg %u, TCBn_CTRLB reg %u, EVCTRL reg %u\n", TCBn_IC_OBJECT.CTRLA, TCBn_IC_OBJECT.CTRLB, TCBn_IC_OBJECT.EVCTRL);
       pt = ct;
+    }
+
+    unsigned long temp;
+    ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+      temp = ledStartTime;
+    }
+    if (ct - temp >= 100) { // leave the LED on for 100ms once it's activated
+      digitalWrite(LED_PIN, 0);
+      digitalWrite(LED_BUILTIN, 0);
+      // static bool printed = false;
+      // if (!printed) {
+      //   Serial.printf("LED turns off\n");
+      //   printed = true;
+      // }
     }
   }
   return 0;
@@ -59,7 +75,7 @@ typedef enum {
 #define NUM_CYCLES_FOR_1_125ms_AT_8MHz    9000
 #define NUM_CYCLES_FOR_2_25ms_AT_8MHz     18000
 #define NUM_CYCLES_FOR_3_5ms_AT_8MHz      28000
-#define CYCLES_THRESHOLD                  1000 // 1000 cycles at 125ns = .125ms padding
+#define CYCLES_THRESHOLD                  2000 // 1000 cycles at 125ns = .125ms padding
 #define EXPECTED_BYTE_RECEIVED            0xD2
 
 /** 
@@ -81,6 +97,8 @@ ISR(TCB1_INT_vect) {
   static uint8_t byteReceived = 0;
   uint16_t cycleCount = TCBn_IC_OBJECT.CCMP;
 
+  // Serial.printf("count %u\n", cycleCount);
+
   switch (curState) {
     case WAIT_START:
       if ((cycleCount > (NUM_CYCLES_FOR_3_5ms_AT_8MHz - CYCLES_THRESHOLD))
@@ -89,7 +107,6 @@ ISR(TCB1_INT_vect) {
         curBit = 0;
         byteReceived = 0;
         curState = CAPTURE_DATA;
-        digitalWrite(LED_PIN, 0);
       }
       break;
     case CAPTURE_DATA:
@@ -116,6 +133,8 @@ ISR(TCB1_INT_vect) {
         if (byteReceived == EXPECTED_BYTE_RECEIVED) {
           // expected byte has been received, light the LED
           digitalWrite(LED_PIN, HIGH);
+          digitalWrite(LED_BUILTIN, HIGH);
+          ledStartTime = millis();
         }
         curState = WAIT_START;
       }
