@@ -1,13 +1,17 @@
+/** 
+ * @Author: Kodiak North 
+ * @Date: 2021-01-21 11:25:01 
+ * @Desc: this code enables/disables the IR LED on the Truck
+ */
+
 #include <Arduino.h>
 #include <util/atomic.h>
 
 #include "../lib/ArduinoTimerConfig/TimerConfig.h"
 #include "../lib/DataLog/DataLog.h"
 
-// TODO: test generating a waveform at 1kHz and determine whether the register needs a +1 or not
-
-#define LED_OUT 2
-#define PWM_OUT 5
+#define PWM_OUT 2
+#define LED_OUT 3
 #define BTN_IN  7
 
 void InitIRLedTimer(void);
@@ -18,13 +22,14 @@ void StopIRLedBurst(void);
 
 typedef enum {
   START_BURST_7ms,
-  START_DELAY_3_5ms, // 1.5 s
+  START_DELAY_3_5ms,
   BURSTING,
   BURST_GAP_TRANSMIT_1,
   BURST_GAP_TRANSMIT_0,
   SIGNAL_GAP,
 } ir_pulse_state_t;
 
+// voltalie variables because they're modified by the StartIRLedTimer function
 static volatile ir_pulse_state_t curState = START_BURST_7ms;
 static volatile uint16_t cycleCount = 0;
 
@@ -34,10 +39,11 @@ int main() {
   delay(100); // small delay to give the serial port time to boot up
   LogInfo("Enable IR LED project begins\n");
 
-  pinMode(PWM_OUT, OUTPUT); // pin D5 is used for the PWM output
   pinMode(LED_OUT, OUTPUT);
   pinMode(BTN_IN, INPUT_PULLUP);
-  InitIRLedTimer();
+
+  InitIRLedTimer(); // init the timer before setting the OC pin to output as per section 17.7.3 in ATmega2560 datasheet
+  pinMode(PWM_OUT, OUTPUT); // pin D2 must be used for the PWM output
   StartIRLedTimer();
 
   while (1) {
@@ -59,18 +65,20 @@ int main() {
 #define NUM_CYCLES_FOR_2_25ms_AT_37_9_kHz     85
 #define NUM_CYCLES_FOR_3_5ms_AT_37_9_kHz      133
 #define NUM_CYCLES_FOR_7ms_AT_37_9_kHz        265
-#define NUM_CYCLES_FOR_16ms_AT_37_9_kHz       606
+#define NUM_CYCLES_FOR_20ms_AT_37_9_kHz       758 // DO NOT USE - rec increments at 8MHz to 20ms which causes
+                                                  // 16-bit timer to rollover 2.44 times.. 44% of 65535 is
+                                                  // 28835.4 which is far too close to 3.5ms at 8MHz val of 28000
+#define NUM_CYCLES_FOR_30ms_AT_37_9_kHz       1137
 #define NUM_CYCLES_FOR_BURST                  10
-
-// modified version of NEC Code - repetitive data, LSB transmitted first
-/** with current config, data rate is at roughly 22Hz
- * PL lifts at roughly 1.33 in/s, let's round up at say 1.5 in/s
- * Receiver sensing area is 0.217 inches in diameter
- * => 0.217in/1.5in/s = 0.145s = 145ms to detect the data stream
- * 22Hz has 45ms period => about 3 tries to detect the data
+/** 
+ * @Author: Kodiak North 
+ * @Date: 2021-01-21 14:41:34 
+ * @Desc: IR LED Timer's interrupt vector for transmitting data via IR
+ * to the T1838 receiver based on a modified version of NEC Code -
+ * repetitive data with the LSB transmitted first
  */
-ISR(TIMER3_COMPA_vect) {
-  static uint8_t byteToTransmit = 0b11010010; // 0xD2
+ISR(TIMER3_COMPB_vect) {
+  static uint8_t byteToTransmit = 0xD2; // 11010010
   static uint8_t curBit = 0;
   cycleCount++;
 
@@ -122,8 +130,10 @@ ISR(TIMER3_COMPA_vect) {
         curState = BURSTING;
       }
       break;
-    case SIGNAL_GAP: // gap for 16ms before sending the next signal
-      if (cycleCount >= NUM_CYCLES_FOR_16ms_AT_37_9_kHz) {
+    case SIGNAL_GAP:
+      /** gap for >15ms (as per 1838 IR rec datasheet) before sending the next signal
+       * NOTE: cannot gap for 20ms because timer rolls over and causes issues. 30ms works fine */
+      if (cycleCount >= NUM_CYCLES_FOR_30ms_AT_37_9_kHz) {
         cycleCount = 0;
         StartIRLedBurst();
         curState = START_BURST_7ms;
@@ -132,13 +142,19 @@ ISR(TIMER3_COMPA_vect) {
   }
 }
 
-/** for pwm freq of 37.9 kHz, want prescaler of 1, and TOP = (clkSpeed / (freqHz * prescaler)) - 1
+/** 
+ * @Author: Kodiak North 
+ * @Date: 2021-01-21 14:09:35 
+ * @Desc: initializes Timer3 for Output Compare mode, see section 17.7 in ATmega2560 datasheet 
+ * IR LED must burst at 37.9 kHz and 33% duty for the T1838 receiver to accept the signal. Therefore,
+ * for pwm freq of 37.9 kHz, want prescaler of 1, and TOP = (clkSpeed / (freqHz * prescaler)) - 1
  * -> (16000000 / (37900 * 1)) - 1 = 421.16, round down to 421
- * for 33% duty, OCR3A = TOP * 0.33 = 421 * 0.33 = 138.93, round up to 139
+ * for 33% duty, OCR3B = TOP * 0.33 = 421 * 0.33 = 138.93, round up to 139
  * OC3A is PortE3 which is pin D5
- * OC3B is PortE4 which is pin D2
+ * OC3B is PortE4 which is pin D2 - This one is used!
  * OC3C is PortE5 which is pin D3 
- * NOTE: using channel A for waveform, must set D5 to output pin */
+ * NOTE: using channel B for waveform, must set D2 to output pin
+ */
 void InitIRLedTimer(void) {
   ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
     TCCR3A = 0; TCCR3B = 0; TCCR3C = 0; // set TCCRnx registers to 0
@@ -146,26 +162,40 @@ void InitIRLedTimer(void) {
      * therefore need to set WGM3 bits 3, 2, and 1 */
     TCCR3A |= (1 << WGM31); // TCCRnA holds WGMn bits [1:0]
     TCCR3B |= ((1 << WGM33) | (1 << WGM32)); // TCCRnB holds WGMn bits [3:2]
-    // set ICR3 and OCR3A registers to generate the desired waveform
-    OCR3A = 139;
+    // set ICR3 and OCR3B registers to generate the desired waveform
+    OCR3B = 139;
     ICR3 = 421;
-    // enable the OCIE3A interrupt
-    TIMSK3 |= (1 << OCIE3A); 
+    // enable the OCIE3B interrupt
+    TIMSK3 |= (1 << OCIE3B);
   }
 }
 
+/** 
+ * @Author: Kodiak North 
+ * @Date: 2021-01-21 14:13:01 
+ * @Desc: starts the IR LED timer to drive the IR LED as per
+ * the modified verision of NEC Code - repetitive data so the
+ * PL can detect a HEIGHT_MATCHED event
+ */
 void StartIRLedTimer(void) {
   ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
     // reset current state and counter variables
     curState = START_BURST_7ms;
     cycleCount = 0;
     StartIRLedBurst(); // set register bits so output compare generates a waveform
-    /** set CS3[2:0] for 1 prescaler, therefore need to set bit 0.
-     * NOTE: setting the CS3 bits starts the counter */
+    /** set CS3[2:0] for 1 prescaler, therefore need to set bit 0 and leave the
+     * others cleared.
+     * NOTE: setting CS3 bits starts the counter */
     TCCR3B |= (1 << CS30);
   }
 }
 
+/** 
+ * @Author: Kodiak North 
+ * @Date: 2021-01-21 14:15:41 
+ * @Desc: stops the timer. call this function once the height
+ * has been matched to reduce the load on the processor
+ */
 void StopIRLedTimer(void) {
   ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
     // clear the CS3[2:0] bits to stop the timer from counting
@@ -173,18 +203,31 @@ void StopIRLedTimer(void) {
   }
 }
 
+/** 
+ * @Author: Kodiak North 
+ * @Date: 2021-01-21 14:16:37 
+ * @Desc: starts the 37.9 kHz pwm burst. this is a helper function used by
+ * the IR LED Timer's interrupt vector and the StartIRLedTimer, and it
+ * should not be called anywhere else!
+ */
 void StartIRLedBurst(void) {
   ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-    /** connect OC3A to the port, config COM3A[1:0] for non-inverting mode,
-     * therefore need to set bit 1. COM3B/C[1:0] are left as 0, leaving
-     * OC3B/C disconnected so those ports operate normally */
-    TCCR3A |= (1 << COM3A1);
+    /** connect OC3B to the port, config COM3B[1:0] for non-inverting mode,
+     * therefore need to set bit 1 and leave bit 0 cleared. COM3A/C[1:0] are
+     * left as 0, leaving OC3A/C disconnected so those ports operate normally */
+    TCCR3A |= (1 << COM3B1);
   }
 }
 
+/** 
+ * @Author: Kodiak North 
+ * @Date: 2021-01-21 14:19:34 
+ * @Desc: stops the 37.9 kHz pwm burst. this is a helper function used by
+ * the IR LED Timer's interrupt vector, and it should not be called anywhere else!
+ */
 void StopIRLedBurst(void) {
   ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-    // clear the COM3A[1:0] bits to disconnect OC3A output from the timer
-    TCCR3A &= ~((1 << COM3A1) | (1 << COM3A0));
+    // clear the COM3B[1:0] bits to disconnect OC3B output from the timer
+    TCCR3A &= ~((1 << COM3B1) | (1 << COM3B0));
   }
 }

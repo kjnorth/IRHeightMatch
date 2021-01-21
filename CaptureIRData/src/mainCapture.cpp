@@ -5,7 +5,7 @@
 #define CAPTURE_PIN 3
 #define LED_PIN 5
 
-/** make this either TCB1 or TCB2, TCB3/4 ports are not mapped to N.E. pinout
+/** make this either TCB0 or TCB1, TCB2/3 ports are not mapped to N.E. pinout
  * NOTE: modify the PORTMUX, EVSYS, and Interrupt Vector properly in Init
  * function when changing this #define */
 #define TCBn_IC_OBJECT TCB1
@@ -13,8 +13,6 @@
 void InitIRCaptureTimer(void);
 void StartIRCaptureTimer(void);
 void StopIRCaptureTimer(void);
-
-void TestISR(void);
 
 volatile unsigned long ledStartTime = 0;
 
@@ -24,12 +22,15 @@ int main() {
   delay(100); // small delay to give the serial port time to boot up
   Serial.printf("Capture IR Data project begins\n");
 
-  pinMode(CAPTURE_PIN, INPUT_PULLUP);
+  // Kodiak 01/21/2021 - DUMMY CODE, do not port into front subdev project!
   // **** example pin config for ISR on an edge change ****
   PORTA.DIRCLR |= (1 << 2); // set PA2 (D18) to input
   PORTA.PIN2CTRL = 0; // set PA2 (D18) CTRL for no inversion, no pullup, and interrupts disabled (see 16.5.12 in ATmega4809 datasheet)
   PORTA.PIN2CTRL |= PORT_ISC_BOTHEDGES_gc;
   // ******************************************************
+  // **** end DUMMY CODE ****
+
+  pinMode(CAPTURE_PIN, INPUT_PULLUP);
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
   pinMode(LED_BUILTIN, OUTPUT);
@@ -55,11 +56,6 @@ int main() {
     if (ct - temp >= 100) { // leave the LED on for 100ms once it's activated
       digitalWrite(LED_PIN, 0);
       digitalWrite(LED_BUILTIN, 0);
-      // static bool printed = false;
-      // if (!printed) {
-      //   Serial.printf("LED turns off\n");
-      //   printed = true;
-      // }
     }
   }
   return 0;
@@ -71,33 +67,27 @@ typedef enum {
 } ir_captutre_state_t;
 
 // NOTE: running at CLK_DIV2 is 8MHz freq which is a 125ns period
-// NOTE: 1ms is 1x10^6ns
 #define NUM_CYCLES_FOR_1_125ms_AT_8MHz    9000
 #define NUM_CYCLES_FOR_2_25ms_AT_8MHz     18000
 #define NUM_CYCLES_FOR_3_5ms_AT_8MHz      28000
-#define CYCLES_THRESHOLD                  2000 // 1000 cycles at 125ns = .125ms padding
-#define EXPECTED_BYTE_RECEIVED            0xD2
-
+#define CYCLES_THRESHOLD                  2000 // 2000 cycles at 125ns = .250ms padding // I want to try 1500 because 2000 is very close to overlapping, but it does work
+#define EXPECTED_BYTE_RECEIVED            0xD2 // 11010010
 /** 
  * @Author: Kodiak North 
  * @Date: 2020-11-04 08:19:24 
- * @Desc: TCBn is configured for Input Capture
- * Pulse Width Measurement mode to measure
- * the duration between pulses on the VM317 IR
- * receiver. The IR LED uses a modified version
- * of NEC Code to transmits single byte. An event
- * is posted upon reception of the expected byte.
+ * @Desc: TCBn is configured for Input Capture Pulse Width Measurement mode
+ * to measure the duration between pulses on the T1838 IR receiver. The IR
+ * LED uses a modified version of NEC Code - repetitive data to transmit a
+ * single byte. A HEIGHT_MATCHED event is posted upon reception of the
+ * expected byte.
  * Note: TCBn increments at 8MHz i.e. 125ns period
- * Note: TCB1 is currently used, meaning IC pin
- * is D3
+ * Note: TCB1 is currently used, meaning IC pin is D3
  */
 ISR(TCB1_INT_vect) {
   static ir_captutre_state_t curState = WAIT_START;
   static uint8_t curBit = 0;
   static uint8_t byteReceived = 0;
   uint16_t cycleCount = TCBn_IC_OBJECT.CCMP;
-
-  // Serial.printf("count %u\n", cycleCount);
 
   switch (curState) {
     case WAIT_START:
@@ -114,7 +104,7 @@ ISR(TCB1_INT_vect) {
           && (cycleCount <= (NUM_CYCLES_FOR_1_125ms_AT_8MHz + CYCLES_THRESHOLD))) {
         // 0 received, clear the cur bit
         // byteReceived &= ~(1 << curBit);
-        /** unnecessary to call line above since byteReceived is cleared in WAIT_START
+        /** unnecessary to call line above since byteReceived is cleared in WAIT_START.
          * condition is still necessary so the 'else' is not entered incorrectly */
         curBit++;
       }
@@ -131,10 +121,14 @@ ISR(TCB1_INT_vect) {
 
       if (curBit > 7) { // all bits[7:0] received, no corrupt data, check for correct byte received
         if (byteReceived == EXPECTED_BYTE_RECEIVED) {
+          // Kodiak 01/21/2021 - DUMMY CODE, do not port into front subdev project!
           // expected byte has been received, light the LED
-          digitalWrite(LED_PIN, HIGH);
-          digitalWrite(LED_BUILTIN, HIGH);
-          ledStartTime = millis();
+          // digitalWrite(LED_PIN, HIGH);
+          // digitalWrite(LED_BUILTIN, HIGH);
+          // ledStartTime = millis();
+          // **** end DUMMY CODE ****
+
+          // post HEIGHT_MATCHED event!
         }
         curState = WAIT_START;
       }
@@ -142,12 +136,14 @@ ISR(TCB1_INT_vect) {
   }
 }
 
+// Kodiak 01/21/2021 - DUMMY CODE, do not port into front subdev project!
 // **** interrupt handler for any? interrupt on port A ****
 ISR(PORTA_PORT_vect) {
   PORTA.INTFLAGS |= (1 << 2); // clear PA2 interrupt flag
   // Serial.printf("port a interrupt\n");
 }
 // ********************************************************
+// **** end DUMMY CODE ****
 
 /** 
  * @Author: Kodiak North 
@@ -186,10 +182,25 @@ void InitIRCaptureTimer(void) {
   EVSYS.USERTCB1 = EVSYS_CHANNEL_CHANNEL4_gc; // map event system channel 4 to TCB1 event user
 }
 
+/** 
+ * @Author: Kodiak North 
+ * @Date: 2021-01-21 14:58:48 
+ * @Desc: starts the IR capture timer to capture data
+ * sent from the Truck's IR LED
+ */
 void StartIRCaptureTimer(void) {
   TCBn_IC_OBJECT.CTRLA |= (1 << TCB_ENABLE_bp); // set CTRLA's enable bit which is bit 0
 }
 
+/** 
+ * @Author: Kodiak North 
+ * @Date: 2021-01-21 15:01:36 
+ * @Desc: stops the IR capture timer. call this function once the
+ * height has been matched
+ * @NOTE: this can maybe be called directly in the interrupt vector when the
+ * HEIGHT_MATCHED event is posted, but unsure about that now, so don't do it
+ * quite yet
+ */
 void StopIRCaptureTimer(void) {
   TCBn_IC_OBJECT.CTRLA &= ~(1 << TCB_ENABLE_bp); // clear CTRLA's enable bit which is bit 0
 }
