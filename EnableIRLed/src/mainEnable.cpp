@@ -2,6 +2,8 @@
  * @Author: Kodiak North 
  * @Date: 2021-01-21 11:25:01 
  * @Desc: this code enables/disables the IR LED on the Truck
+ * by following a modified version of the NEC Code - repetitive data
+ * for transmitting data via IR
  */
 
 #include <Arduino.h>
